@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, Check, ChevronRight, CircleDollarSign, Clock3, Plus, ReceiptText, ShieldCheck, Smartphone, X } from 'lucide-react'
 
 type Loan = { id: string; friendName: string; amount: number; dueDate: string; repaid: boolean }
@@ -18,12 +18,23 @@ export default function Page() {
   const [phone, setPhone] = useState('')
   const [otp, setOtp] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
-  const [loans, setLoans] = useState(initialLoans)
+  const [loans, setLoans] = useState<Loan[]>([])
+  const [loading, setLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [friend, setFriend] = useState('')
   const [amount, setAmount] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [sent, setSent] = useState(false)
+
+  useEffect(() => {
+    if (!authenticated || !phone) return
+    setLoading(true)
+    fetch(`/api/loans?phone=${encodeURIComponent(phone)}`)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Unable to load ledger')))
+      .then((data) => setLoans(data.loans ?? []))
+      .catch(() => setLoans([]))
+      .finally(() => setLoading(false))
+  }, [authenticated, phone])
 
   const summary = useMemo(() => ({
     lent: loans.reduce((sum, loan) => sum + loan.amount, 0),
@@ -33,11 +44,19 @@ export default function Page() {
 
   if (!authenticated) return <Login phone={phone} setPhone={setPhone} otp={otp} setOtp={setOtp} sent={sent} onSend={() => setSent(true)} onVerify={() => otp.length === 4 && setAuthenticated(true)} />
 
-  const addLoan = (event: React.FormEvent) => {
+  const addLoan = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!friend.trim() || !amount || !dueDate) return
-    setLoans((current) => [{ id: crypto.randomUUID(), friendName: friend.trim(), amount: Number(amount), dueDate, repaid: false }, ...current])
+    if (!friend.trim() || !amount || !dueDate || Number(amount) <= 0) return
+    const response = await fetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, friendName: friend.trim(), amount: Number(amount), dueDate }) })
+    if (!response.ok) return
+    const loan = await response.json()
+    setLoans((current) => [loan, ...current])
     setFriend(''); setAmount(''); setDueDate(''); setShowForm(false)
+  }
+
+  const markRepaid = async (id: string) => {
+    const response = await fetch('/api/loans', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, phone }) })
+    if (response.ok) setLoans((current) => current.map((item) => item.id === id ? { ...item, repaid: true } : item))
   }
 
   return <main className="min-h-screen bg-[#f5f6f3] text-[#17231f]">
@@ -52,7 +71,7 @@ export default function Page() {
       </section>
       <section className="mt-10 grid gap-4 sm:grid-cols-3"><Stat label="Total lent" value={money(summary.lent)} icon={<ArrowUpRight />} /><Stat label="Total repaid" value={money(summary.repaid)} icon={<Check />} /><Stat label="Overdue" value={money(summary.overdue)} icon={<Clock3 />} warn /></section>
       <section className="mt-12"><div className="mb-5 flex items-center justify-between"><div><h2 className="text-xl font-semibold tracking-tight">Your ledger</h2><p className="mt-1 text-sm text-[#7a877f]">Everything in one calm place.</p></div><button onClick={() => setShowForm(true)} className="flex items-center gap-2 rounded-full bg-[#2e6b49] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#24583b]"><Plus size={17} /> Add entry</button></div>
-        <div className="overflow-hidden rounded-3xl border border-[#e0e6df] bg-white"><div className="divide-y divide-[#edf0ed]">{loans.map((loan) => { const overdue = !loan.repaid && new Date(loan.dueDate) < new Date(); return <div key={loan.id} className={`flex flex-wrap items-center gap-4 px-5 py-5 md:px-7 ${overdue ? 'bg-[#fffaf3]' : ''}`}><div className={`flex size-11 items-center justify-center rounded-2xl text-sm font-bold ${overdue ? 'bg-[#f8e6c8] text-[#9a6a2d]' : 'bg-[#e6f0e2] text-[#39704f]'}`}>{loan.friendName.split(' ').map((n) => n[0]).join('')}</div><div className="min-w-[150px] flex-1"><p className="font-semibold">{loan.friendName}</p><p className={`mt-1 text-sm ${overdue ? 'font-medium text-[#b17632]' : 'text-[#7c887f]'}`}>{loan.repaid ? `Repaid · ${prettyDate(loan.dueDate)}` : overdue ? `Overdue · due ${prettyDate(loan.dueDate)}` : `Due ${prettyDate(loan.dueDate)}`}</p></div><p className="text-lg font-semibold">{money(loan.amount)}</p>{loan.repaid ? <span className="rounded-full bg-[#e7f2e4] px-3 py-1 text-xs font-semibold text-[#3f7651]">Repaid</span> : <button onClick={() => setLoans((current) => current.map((item) => item.id === loan.id ? { ...item, repaid: true } : item))} className="flex items-center gap-1 rounded-full border border-[#c9d9ca] px-3 py-1.5 text-xs font-semibold text-[#39704f] transition hover:bg-[#edf5eb]">Mark repaid <ChevronRight size={14} /></button>}</div> })}</div></div>
+        <div className="overflow-hidden rounded-3xl border border-[#e0e6df] bg-white"><div className="divide-y divide-[#edf0ed]">{loans.map((loan) => { const overdue = !loan.repaid && new Date(loan.dueDate) < new Date(); return <div key={loan.id} className={`flex flex-wrap items-center gap-4 px-5 py-5 md:px-7 ${overdue ? 'bg-[#fffaf3]' : ''}`}><div className={`flex size-11 items-center justify-center rounded-2xl text-sm font-bold ${overdue ? 'bg-[#f8e6c8] text-[#9a6a2d]' : 'bg-[#e6f0e2] text-[#39704f]'}`}>{loan.friendName.split(' ').map((n) => n[0]).join('')}</div><div className="min-w-[150px] flex-1"><p className="font-semibold">{loan.friendName}</p><p className={`mt-1 text-sm ${overdue ? 'font-medium text-[#b17632]' : 'text-[#7c887f]'}`}>{loan.repaid ? `Repaid · ${prettyDate(loan.dueDate)}` : overdue ? `Overdue · due ${prettyDate(loan.dueDate)}` : `Due ${prettyDate(loan.dueDate)}`}</p></div><p className="text-lg font-semibold">{money(loan.amount)}</p>{loan.repaid ? <span className="rounded-full bg-[#e7f2e4] px-3 py-1 text-xs font-semibold text-[#3f7651]">Repaid</span> : <button onClick={() => markRepaid(loan.id)} className="flex items-center gap-1 rounded-full border border-[#c9d9ca] px-3 py-1.5 text-xs font-semibold text-[#39704f] transition hover:bg-[#edf5eb]">Mark repaid <ChevronRight size={14} /></button>}</div> })}</div></div>
       </section>
     </div>
     {showForm && <div className="fixed inset-0 z-10 flex items-center justify-center bg-[#142019]/30 p-5 backdrop-blur-sm"><form onSubmit={addLoan} className="w-full max-w-md rounded-3xl bg-white p-7 shadow-2xl"><div className="mb-7 flex items-center justify-between"><div><h2 className="text-2xl font-semibold tracking-tight">New entry</h2><p className="mt-1 text-sm text-[#79867e]">Record a loan in a few details.</p></div><button type="button" onClick={() => setShowForm(false)} className="rounded-full p-2 text-[#819087] hover:bg-[#f1f4f0]"><X /></button></div><div className="flex flex-col gap-5"><label className="text-sm font-medium">Friend name<input value={friend} onChange={(e) => setFriend(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" placeholder="e.g. Sam Lee" required /></label><label className="text-sm font-medium">Amount<input type="number" min="1" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" placeholder="0.00" required /></label><label className="text-sm font-medium">Due date<input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" required /></label></div><button className="mt-7 w-full rounded-xl bg-[#2e6b49] py-3 font-semibold text-white hover:bg-[#24583b]">Save entry</button></form></div>}
