@@ -25,14 +25,25 @@ export default function Page() {
   const [amount, setAmount] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [sent, setSent] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
     if (!authenticated || !phone) return
     setLoading(true)
+    setLoadError('')
     fetch(`/api/loans?phone=${encodeURIComponent(phone)}`)
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Unable to load ledger')))
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.error || 'Unable to load ledger')
+        return data
+      })
       .then((data) => setLoans(data.loans ?? []))
-      .catch(() => setLoans([]))
+      .catch((error) => {
+        setLoans([])
+        setLoadError(error instanceof Error ? error.message : 'Unable to load ledger')
+      })
       .finally(() => setLoading(false))
   }, [authenticated, phone])
 
@@ -44,14 +55,35 @@ export default function Page() {
 
   if (!authenticated) return <Login phone={phone} setPhone={setPhone} otp={otp} setOtp={setOtp} sent={sent} onSend={() => setSent(true)} onVerify={() => otp.length === 4 && setAuthenticated(true)} />
 
-  const addLoan = async (event: React.FormEvent) => {
+  const addLoan = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!friend.trim() || !amount || !dueDate || Number(amount) <= 0) return
-    const response = await fetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, friendName: friend.trim(), amount: Number(amount), dueDate }) })
-    if (!response.ok) return
-    const loan = await response.json()
-    setLoans((current) => [loan, ...current])
-    setFriend(''); setAmount(''); setDueDate(''); setShowForm(false)
+    if (submitting) return
+    setFormError('')
+    const normalizedFriend = friend.trim()
+    const numericAmount = Number(amount)
+    if (!normalizedFriend) return setFormError('Enter a friend name.')
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) return setFormError('Enter an amount greater than zero.')
+    if (!dueDate || Number.isNaN(new Date(`${dueDate}T12:00:00`).getTime())) return setFormError('Choose a valid due date.')
+
+    setSubmitting(true)
+    try {
+      const response = await fetch('/api/loans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, friendName: normalizedFriend, amount: numericAmount, dueDate }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Unable to save this entry.')
+      setLoans((current) => [data, ...current])
+      setFriend('')
+      setAmount('')
+      setDueDate('')
+      setShowForm(false)
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to save this entry.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const markRepaid = async (id: string) => {
@@ -71,10 +103,11 @@ export default function Page() {
       </section>
       <section className="mt-10 grid gap-4 sm:grid-cols-3"><Stat label="Total lent" value={money(summary.lent)} icon={<ArrowUpRight />} /><Stat label="Total repaid" value={money(summary.repaid)} icon={<Check />} /><Stat label="Overdue" value={money(summary.overdue)} icon={<Clock3 />} warn /></section>
       <section className="mt-12"><div className="mb-5 flex items-center justify-between"><div><h2 className="text-xl font-semibold tracking-tight">Your ledger</h2><p className="mt-1 text-sm text-[#7a877f]">Everything in one calm place.</p></div><button onClick={() => setShowForm(true)} className="flex items-center gap-2 rounded-full bg-[#2e6b49] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#24583b]"><Plus size={17} /> Add entry</button></div>
-        <div className="overflow-hidden rounded-3xl border border-[#e0e6df] bg-white"><div className="divide-y divide-[#edf0ed]">{loans.map((loan) => { const overdue = !loan.repaid && new Date(loan.dueDate) < new Date(); return <div key={loan.id} className={`flex flex-wrap items-center gap-4 px-5 py-5 md:px-7 ${overdue ? 'bg-[#fffaf3]' : ''}`}><div className={`flex size-11 items-center justify-center rounded-2xl text-sm font-bold ${overdue ? 'bg-[#f8e6c8] text-[#9a6a2d]' : 'bg-[#e6f0e2] text-[#39704f]'}`}>{loan.friendName.split(' ').map((n) => n[0]).join('')}</div><div className="min-w-[150px] flex-1"><p className="font-semibold">{loan.friendName}</p><p className={`mt-1 text-sm ${overdue ? 'font-medium text-[#b17632]' : 'text-[#7c887f]'}`}>{loan.repaid ? `Repaid · ${prettyDate(loan.dueDate)}` : overdue ? `Overdue · due ${prettyDate(loan.dueDate)}` : `Due ${prettyDate(loan.dueDate)}`}</p></div><p className="text-lg font-semibold">{money(loan.amount)}</p>{loan.repaid ? <span className="rounded-full bg-[#e7f2e4] px-3 py-1 text-xs font-semibold text-[#3f7651]">Repaid</span> : <button onClick={() => markRepaid(loan.id)} className="flex items-center gap-1 rounded-full border border-[#c9d9ca] px-3 py-1.5 text-xs font-semibold text-[#39704f] transition hover:bg-[#edf5eb]">Mark repaid <ChevronRight size={14} /></button>}</div> })}</div></div>
+        {loadError && <p role="alert" className="mb-4 rounded-xl border border-[#f0dfc2] bg-[#fffaf3] px-4 py-3 text-sm text-[#9a6a2d]">{loadError}</p>}
+        <div className="overflow-hidden rounded-3xl border border-[#e0e6df] bg-white"><div className="divide-y divide-[#edf0ed]">{loading ? <p className="px-7 py-8 text-sm text-[#7a877f]">Loading your entries...</p> : loans.length === 0 ? <p className="px-7 py-8 text-sm text-[#7a877f]">No entries yet. Add your first loan to get started.</p> : loans.map((loan) => { const overdue = !loan.repaid && new Date(loan.dueDate) < new Date(); return <div key={loan.id} className={`flex flex-wrap items-center gap-4 px-5 py-5 md:px-7 ${overdue ? 'bg-[#fffaf3]' : ''}`}><div className={`flex size-11 items-center justify-center rounded-2xl text-sm font-bold ${overdue ? 'bg-[#f8e6c8] text-[#9a6a2d]' : 'bg-[#e6f0e2] text-[#39704f]'}`}>{loan.friendName.split(' ').map((n) => n[0]).join('')}</div><div className="min-w-[150px] flex-1"><p className="font-semibold">{loan.friendName}</p><p className={`mt-1 text-sm ${overdue ? 'font-medium text-[#b17632]' : 'text-[#7c887f]'}`}>{loan.repaid ? `Repaid · ${prettyDate(loan.dueDate)}` : overdue ? `Overdue · due ${prettyDate(loan.dueDate)}` : `Due ${prettyDate(loan.dueDate)}`}</p></div><p className="text-lg font-semibold">{money(loan.amount)}</p>{loan.repaid ? <span className="rounded-full bg-[#e7f2e4] px-3 py-1 text-xs font-semibold text-[#3f7651]">Repaid</span> : <button onClick={() => markRepaid(loan.id)} className="flex items-center gap-1 rounded-full border border-[#c9d9ca] px-3 py-1.5 text-xs font-semibold text-[#39704f] transition hover:bg-[#edf5eb]">Mark repaid <ChevronRight size={14} /></button>}</div> })}</div></div>
       </section>
     </div>
-    {showForm && <div className="fixed inset-0 z-10 flex items-center justify-center bg-[#142019]/30 p-5 backdrop-blur-sm"><form onSubmit={addLoan} className="w-full max-w-md rounded-3xl bg-white p-7 shadow-2xl"><div className="mb-7 flex items-center justify-between"><div><h2 className="text-2xl font-semibold tracking-tight">New entry</h2><p className="mt-1 text-sm text-[#79867e]">Record a loan in a few details.</p></div><button type="button" onClick={() => setShowForm(false)} className="rounded-full p-2 text-[#819087] hover:bg-[#f1f4f0]"><X /></button></div><div className="flex flex-col gap-5"><label className="text-sm font-medium">Friend name<input value={friend} onChange={(e) => setFriend(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" placeholder="e.g. Sam Lee" required /></label><label className="text-sm font-medium">Amount<input type="number" min="1" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" placeholder="0.00" required /></label><label className="text-sm font-medium">Due date<input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" required /></label></div><button className="mt-7 w-full rounded-xl bg-[#2e6b49] py-3 font-semibold text-white hover:bg-[#24583b]">Save entry</button></form></div>}
+    {showForm && <div className="fixed inset-0 z-10 flex items-center justify-center bg-[#142019]/30 p-5 backdrop-blur-sm"><form onSubmit={addLoan} className="w-full max-w-md rounded-3xl bg-white p-7 shadow-2xl"><div className="mb-7 flex items-center justify-between"><div><h2 className="text-2xl font-semibold tracking-tight">New entry</h2><p className="mt-1 text-sm text-[#79867e]">Record a loan in a few details.</p></div><button type="button" onClick={() => setShowForm(false)} className="rounded-full p-2 text-[#819087] hover:bg-[#f1f4f0]"><X /></button></div><div className="flex flex-col gap-5"><label className="text-sm font-medium">Friend name<input value={friend} onChange={(e) => setFriend(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" placeholder="e.g. Sam Lee" required /></label><label className="text-sm font-medium">Amount<input type="number" min="1" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" placeholder="0.00" required /></label><label className="text-sm font-medium">Due date<input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="mt-2 w-full rounded-xl border border-[#dce3dc] px-4 py-3 outline-none focus:border-[#4b8b63]" required /></label></div>{formError && <p role="alert" className="mt-5 rounded-xl border border-[#f0dfc2] bg-[#fffaf3] px-4 py-3 text-sm text-[#9a6a2d]">{formError}</p>}<button type="submit" disabled={submitting} className="mt-7 w-full rounded-xl bg-[#2e6b49] py-3 font-semibold text-white hover:bg-[#24583b] disabled:cursor-not-allowed disabled:opacity-60">{submitting ? 'Saving...' : 'Save entry'}</button></form></div>}
   </main>
 }
 

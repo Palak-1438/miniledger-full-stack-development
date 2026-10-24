@@ -4,12 +4,17 @@ import { NextResponse } from 'next/server'
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 export async function GET(request: Request) {
-  const phone = new URL(request.url).searchParams.get('phone')
+  const phone = new URL(request.url).searchParams.get('phone')?.trim()
   if (!phone) return NextResponse.json({ error: 'Phone is required' }, { status: 400 })
-  const result = await pool.query('SELECT id, friend_name AS "friendName", amount::float, due_date AS "dueDate", repaid_at IS NOT NULL AS repaid, receipt_url AS "receiptUrl" FROM loans WHERE phone = $1 ORDER BY due_date ASC', [phone])
-  const loans = result.rows
-  const summary = { totalLent: loans.reduce((sum, loan) => sum + loan.amount, 0), totalRepaid: loans.filter((loan) => loan.repaid).reduce((sum, loan) => sum + loan.amount, 0), overdueAmount: loans.filter((loan) => !loan.repaid && new Date(loan.dueDate) < new Date()).reduce((sum, loan) => sum + loan.amount, 0) }
-  return NextResponse.json({ loans, summary })
+
+  try {
+    const result = await pool.query('SELECT id, friend_name AS "friendName", amount::float, due_date AS "dueDate", repaid_at IS NOT NULL AS repaid, receipt_url AS "receiptUrl" FROM loans WHERE phone = $1 ORDER BY due_date ASC', [phone])
+    const loans = result.rows
+    const summary = { totalLent: loans.reduce((sum, loan) => sum + loan.amount, 0), totalRepaid: loans.filter((loan) => loan.repaid).reduce((sum, loan) => sum + loan.amount, 0), overdueAmount: loans.filter((loan) => !loan.repaid && new Date(loan.dueDate) < new Date()).reduce((sum, loan) => sum + loan.amount, 0) }
+    return NextResponse.json({ loans, summary })
+  } catch {
+    return NextResponse.json({ error: 'Unable to load ledger' }, { status: 500 })
+  }
 }
 
 export async function POST(request: Request) {
